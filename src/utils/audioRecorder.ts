@@ -18,51 +18,65 @@ export class AudioRecorder {
 
   constructor(private socket: Socket) {}
 
-  async start(): Promise<void> {
-    try {
-      // Get media stream
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: this.config.channelCount,
-          sampleRate: this.config.sampleRate,
-          echoCancellation: this.config.echoCancellation,
-          noiseSuppression: this.config.noiseSuppression
-        }
-      });
+ async start(): Promise<void> {
+  try {
+    // Get media stream
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: this.config.channelCount,
+        sampleRate: this.config.sampleRate,
+        echoCancellation: this.config.echoCancellation,
+        noiseSuppression: this.config.noiseSuppression
+      }
+    });
 
-      // Initialize Web Audio API
-      this.audioContext = new AudioContext({
-        sampleRate: this.config.sampleRate
-      });
+    // Initialize Web Audio API
+    this.audioContext = new AudioContext({
+      sampleRate: this.config.sampleRate
+    });
 
-      // Create source node
-      this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
+    // Create source node
+    this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-      // Create processor node for raw audio data
-      this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
+    // Create processor node for raw audio data
+    this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
 
-      // Process audio data
-      this.processorNode.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        const audioData = convertFloat32ToInt16(inputData);
+    let audioBuffer: Int16Array[] = [];  // Buffer to accumulate audio data
+    let chunkDuration = 5 * 1000; // 5 seconds in milliseconds
+    let lastEmitTime = Date.now(); // Track when to emit
 
+    // Process audio data
+    this.processorNode.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+      const audioData = convertFloat32ToInt16(inputData);
 
+      // Add the processed audio data to the buffer
+      audioBuffer.push(audioData);
+
+      // Check if it's time to emit the chunk (every 5 seconds)
+      if (Date.now() - lastEmitTime >= chunkDuration) {
+        // Emit the accumulated chunk of audio data
         this.socket.emit('audio_data', {
-          buffer: audioData.buffer, // Send the ArrayBuffer directly
+          buffer: concatenateBuffers(audioBuffer), // Concatenate the buffered chunks
           timestamp: Date.now(),
           mode: 'both'
         });
-      };
 
-      // Connect nodes
-      this.sourceNode.connect(this.processorNode);
-      this.processorNode.connect(this.audioContext.destination);
+        // Reset the buffer and update the last emit time
+        audioBuffer = [];
+        lastEmitTime = Date.now();
+      }
+    };
 
-    } catch (error) {
-      console.error('Audio recording error:', error);
-      throw new Error('Failed to initialize audio recording');
-    }
+    // Connect nodes
+    this.sourceNode.connect(this.processorNode);
+    this.processorNode.connect(this.audioContext.destination);
+
+  } catch (error) {
+    console.error('Audio recording error:', error);
+    throw new Error('Failed to initialize audio recording');
   }
+}
 
   stop(): void {
     // Disconnect and cleanup audio nodes
